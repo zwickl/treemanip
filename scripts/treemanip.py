@@ -10,11 +10,16 @@ from random import sample
 import dendropy
 
 
+
+
 #for dendropy 4 compatability
 try:
     from dendropy.error import DataError as DataParseError
 except:
     from dendropy.utility.error import DataParseError
+
+from dendropy.dataio.nexusreader  import NexusReader
+from dendropy.dataio.tokenizer  import Tokenizer
 
 def check_for_polytomies(tree):
     '''Check for polytomies by looking for nodes with > 3 neighbors.'''
@@ -139,6 +144,9 @@ annotateArgs.add_argument('--annotate-string', default=None, type=str,
 #                  help='(private) very specialized function to extract and output sequence lengths from tree filenames. Assumes only one tree per file!')
 
 
+quiet = False
+
+
 #if no arguments are passed, try to start the tkinter gui
 tk_root = None
 if len(sys.argv) == 1:
@@ -157,18 +165,9 @@ if len(sys.argv) == 1:
 
     tk_root = Tk()
     tk_gui = ArgparseGui(parser, tk_root, width=1152, height=720)
+    tk_gui.bring_to_front()
 
-    #Need to do this on OS X to bring window to front, otherwise root.lift() should work
-    if 'darwin' in sys.platform.lower():
-        try:
-            #this can give odd non-critical error messages from the OS, so send stderr to devnull
-            retcode = subprocess.call(shlex.split('''/usr/bin/osascript -e 'tell app "Finder" to set frontmost of process "Python" to true' '''), stderr=open(os.devnull, 'wb'))
-        except:
-            #didn't manage to get window to front, but don't worry about it
-            pass
-    else:
-        tk_root.lift()
-   
+  
     #This will block until the window is destroyed by pressing Cancel or Done
     tk_root.wait_window(tk_gui.frame)
     if tk_gui.cancelled:
@@ -178,11 +177,12 @@ if len(sys.argv) == 1:
 else:
     options = parser.parse_args()
 
+options.output_seq_lengths = False
 
 intrees = dendropy.TreeList()
 if not options.treefiles:
     sys.stderr.write('NOTE: reading trees from stdin\n')
-    if options.output_seq_lengths:
+    if hasattr(options, 'output_seq_lengths') and options.output_seq_lengths:
         sys.exit('ERROR: must pass filenames to output sequence lengths\n')
     trees = sys.stdin.read()
     #try two input formats
@@ -190,9 +190,13 @@ if not options.treefiles:
     try:
         #intrees.extend(dendropy.TreeList.get_from_string(trees, "nexus", case_sensitive_taxon_labels=True, preserve_underscores=True))
         intrees.extend(dendropy.TreeList.get_from_string(trees, "nexus", case_sensitive_taxon_labels=True))
-    except DataError:
+    except DataParseError:
         #intrees.extend(dendropy.TreeList.get_from_string(trees, "newick", case_sensitive_taxon_labels=True, preserve_underscores=True))
         intrees.extend(dendropy.TreeList.get_from_string(trees, "newick", case_sensitive_taxon_labels=True))
+    except (DataParseError, Tokenizer.UnexpectedEndOfStreamError, AttributeError)  as e:
+        if not quiet:
+            sys.stderr.write('%s\n' % e.message)
+            sys.exit('Could not read file %s in nexus or newick  format ...\n' % tf)
 
 else:
     for tf in options.treefiles:
@@ -200,9 +204,14 @@ else:
         try:
             #intrees.extend(dendropy.TreeList.get_from_path(tf, "nexus", case_sensitive_taxon_labels=True, preserve_underscores=True))
             intrees.extend(dendropy.TreeList.get_from_path(tf, "nexus", case_sensitive_taxon_labels=True))
-        except DataError:
+        except DataParseError:
             #intrees.extend(dendropy.TreeList.get_from_path(tf, "newick", case_sensitive_taxon_labels=True, preserve_underscores=True))
             intrees.extend(dendropy.TreeList.get_from_path(tf, "newick", case_sensitive_taxon_labels=True))
+        except (DataParseError, Tokenizer.UnexpectedEndOfStreamError, AttributeError)  as e:
+            if not quiet:
+                sys.stderr.write('%s\n' % e.message)
+                sys.exit('Could not read file %s in nexus or newick  format ...\n' % tf)
+        '''
         except ValueError:
             sys.stderr.write('NOTE: ValueError reading from file %s, ' % tf)
             if options.ignore_read_errors:
@@ -216,9 +225,11 @@ else:
             else:
                 sys.exit('exiting (use --ignore-read-errors to ignore this error)')
 
+        '''
+
 sys.stderr.write('read %d trees\n' % len(intrees))
 
-if options.output_seq_lengths:
+if hasattr(options, 'output_seq_lengths') and options.output_seq_lengths:
     if len(intrees) != len(options.treefiles):
         sys.exit('ERROR: can only have one tree per file to output sequence lengths\n')
     treefiles = []
@@ -283,7 +294,7 @@ for intree, treefile in izip_longest(intrees, options.treefiles):
                 patterns = [ re.compile(patt) for patt in patterns ]
                 compare = lambda comp_pat, label: comp_pat.search(label)
 
-            for t in intree.taxon_set:
+            for t in intree.taxon_namespace:
                 for to_match in patterns:
                     if compare(to_match, t.label):
                         #sys.stdout.write('%s\n' % to_match)
@@ -309,8 +320,8 @@ for intree, treefile in izip_longest(intrees, options.treefiles):
                     intree.retain_taxa(matches)
 
             #these are called on TreeLists - not sure if applicable here
-            intree.taxon_set = intree.infer_taxa()
-            intree.reindex_subcomponent_taxa()
+            #intree.taxon_set = intree.infer_taxa()
+            #intree.reindex_subcomponent_taxa()
 
         if options.outgroup_pattern is not None:
             outgroup = None
@@ -334,7 +345,8 @@ for intree, treefile in izip_longest(intrees, options.treefiles):
                     intree.reroot_at_edge(outgroup.edge, update_splits=False, delete_outdegree_one=True) 
         
         elif options.midpoint_root:
-            intree.reroot_at_midpoint(update_splits=False, delete_outdegree_one=True) 
+            #intree.reroot_at_midpoint(update_splits=False, delete_outdegree_one=True) 
+            intree.reroot_at_midpoint(update_bipartitions=False, suppress_unifurcations=True) 
         
         outtrees.append(intree)
         if options.output_seq_lengths:
@@ -348,19 +360,22 @@ if options.prune_to_common_taxa:
     
     for tree in outtrees:
         tree.retain_taxa_with_labels(common_taxon_labels)
-        tree.taxon_set = tree.infer_taxa()
+        #tree.taxon_set = tree.infer_taxa()
 
     if not common_taxon_labels:
         sys.exit('ERROR: no taxa found in all trees')
 
     log.write('pruning all trees to set of %d common taxa\n' % len(common_taxon_labels))
 
-    outtrees.taxon_set = outtrees[0].taxon_set
+    outtrees.taxon_namespace = outtrees[0].taxon_namespace
 
 elif options.prune_from_mrca:
-    new_outtrees = dendropy.TreeList(taxon_set=outtrees.taxon_set)
+    new_outtrees = dendropy.TreeList(taxon_namespace=outtrees.taxon_namespace)
     for tree in outtrees:
-        mrca = tree.mrca(taxon_labels=options.prune_from_mrca)
+        try:
+            mrca = tree.mrca(taxon_labels=options.prune_from_mrca)
+        except KeyError as e:
+            sys.exit('could not find specified MRCA taxa in tree: %s' % options.prune_from_mrca)
         if not mrca:
             sys.exit('Problem finding MRCA for %s and %s.' % (options.prune_from_mrca[0], options.prune_from_mrca[1]))
         #subtree_tips = [ it.taxon for it in mrca.leaf_iter() ]
@@ -430,6 +445,7 @@ if outtrees:
         if not options.retain_comments:
             for tree in outtrees:
                 tree.comments = []
+        #outtrees.write(file=out, schema="nexus", suppress_edge_lengths=options.suppress_branchlengths, suppress_rooting=supress_root_comment, simple=True)
         outtrees.write(file=out, schema="nexus", suppress_edge_lengths=options.suppress_branchlengths, suppress_rooting=supress_root_comment)
     else:
         outtrees.write(file=out, schema="newick", suppress_edge_lengths=options.suppress_branchlengths, suppress_rooting=supress_root_comment)
