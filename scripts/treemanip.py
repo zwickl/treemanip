@@ -5,12 +5,14 @@ import re
 import shlex
 import subprocess
 import argparse
-from itertools import izip_longest
+
+if  sys.version_info[0] < 3:
+    from itertools import izip_longest as zip_longest
+else:
+    from itertools import zip_longest
+
 from random import sample
 import dendropy
-
-
-
 
 #for dendropy 4 compatability
 try:
@@ -151,8 +153,12 @@ quiet = False
 tk_root = None
 if len(sys.argv) == 1:
     try:
-        from Tkinter import *
-        #try to use the tkarg package, otherwise the deprecated tk functions in pygot
+
+        if  sys.version_info[0] < 3:
+            from Tkinter import *
+        else:    
+            from tk import *
+        #try to use my tkarg package 
         try:
             from tkarg import ArgparseGui
         except ImportError:
@@ -193,7 +199,7 @@ if not options.treefiles:
     except DataParseError:
         #intrees.extend(dendropy.TreeList.get_from_string(trees, "newick", case_sensitive_taxon_labels=True, preserve_underscores=True))
         intrees.extend(dendropy.TreeList.get_from_string(trees, "newick", case_sensitive_taxon_labels=True))
-    except (DataParseError, Tokenizer.UnexpectedEndOfStreamError, AttributeError)  as e:
+    except (DataParseError, Tokenizer.UnexpectedEndOfStreamError, AttributeError) as e:
         if not quiet:
             sys.stderr.write('%s\n' % e.message)
             sys.exit('Could not read file %s in nexus or newick  format ...\n' % tf)
@@ -207,7 +213,7 @@ else:
         except DataParseError:
             #intrees.extend(dendropy.TreeList.get_from_path(tf, "newick", case_sensitive_taxon_labels=True, preserve_underscores=True))
             intrees.extend(dendropy.TreeList.get_from_path(tf, "newick", case_sensitive_taxon_labels=True))
-        except (DataParseError, Tokenizer.UnexpectedEndOfStreamError, AttributeError)  as e:
+        except (DataParseError, Tokenizer.UnexpectedEndOfStreamError, AttributeError) as e:
             if not quiet:
                 sys.stderr.write('%s\n' % e.message)
                 sys.exit('Could not read file %s in nexus or newick  format ...\n' % tf)
@@ -247,8 +253,8 @@ outgroupIgnoredCount = 0
 madeBifurcating = 0
 #the treefiles here are only used for --output-seq-lengths mode, which requires one tree per
 #file, and are otherwise ignored. If ignored there may be more trees than treefiles, hence the
-#izip_longest
-for intree, treefile in izip_longest(intrees, options.treefiles):
+#zip_longest
+for intree, treefile in zip_longest(intrees, options.treefiles):
     hasPoly = check_for_polytomies(intree)
     if options.no_bifurcating and not hasPoly:
         ignoredCount += 1
